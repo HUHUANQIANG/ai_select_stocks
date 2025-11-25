@@ -47,23 +47,16 @@ def save_settings(settings):
     with open(SETTINGS_FILE, "w", encoding='utf-8') as f:
         json.dump(settings, f, ensure_ascii=False, indent=4)
 
-# ------------------------------------
-# 格式化函数：亿/万
-# ------------------------------------
 def format_large_num(num):
-    """将数字格式化为 亿/万 (中文习惯)"""
-    if num is None or num == 0:
-        return "-"
+    """亿/万 格式化"""
+    if num is None or num == 0: return "-"
     abs_num = abs(num)
-    if abs_num >= 100000000: # 1亿
-        return f"{num / 100000000.0:.2f}亿"
-    elif abs_num >= 10000: # 1万
-        return f"{num / 10000.0:.2f}万"
-    else:
-        return f"{num:.2f}"
+    if abs_num >= 100000000: return f"{num / 100000000.0:.2f}亿"
+    elif abs_num >= 10000: return f"{num / 10000.0:.2f}万"
+    else: return f"{num:.2f}"
 
 # ==========================================
-# 2. 核心算法 (EMA 版)
+# 2. 核心算法
 # ==========================================
 
 def calculate_ema(series, length):
@@ -96,6 +89,40 @@ def knn_one_step(target_val, history_st_values, history_labels, k):
     return weighted_sum / total_weight
 
 def calculate_trend_status(df, target_direction):
+    """
+    筛选逻辑: 
+    1. 价格 vs 周EMA20
+    2. 日EMA20 vs 日EMA60
+    3. SuperTrend AI 信号
+    """
+    # 1. 周线 EMA20
+    df['time'] = pd.to_datetime(df['time'])
+    df_weekly = df.set_index('time').resample('W').agg({
+        'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'
+    })
+    df_weekly.dropna(subset=['close'], inplace=True)
+    df_weekly['ema20'] = df_weekly['close'].ewm(span=20, adjust=False).mean()
+    
+    if len(df_weekly) < 20: return False, 0, 0
+        
+    w_ema_val = df_weekly['ema20'].iloc[-1]
+    current_price = df['close'].iloc[-1]
+    
+    # 2. 日线 EMA20 vs EMA60
+    ema20_daily = calculate_ema(df['close'], 20)
+    ema60_daily = calculate_ema(df['close'], 60)
+    d_ema20_val = ema20_daily.iloc[-1]
+    d_ema60_val = ema60_daily.iloc[-1]
+    
+    # 过滤条件
+    if target_direction == 'Bullish':
+        if current_price <= w_ema_val: return False, 0, w_ema_val
+        if d_ema20_val <= d_ema60_val: return False, 0, w_ema_val
+    else:
+        if current_price >= w_ema_val: return False, 0, w_ema_val
+        if d_ema20_val >= d_ema60_val: return False, 0, w_ema_val
+
+    # 3. SuperTrend AI
     st_len = 10
     st_factor = 3.0
     k = 3
@@ -104,7 +131,7 @@ def calculate_trend_status(df, target_direction):
     knn_price_len = 20
     knn_st_len = 100
     
-    if len(df) < max(knn_st_len, 200): return False, 0
+    if len(df) < max(knn_st_len, 200): return False, 0, 0
     
     cv = df['close'] * df['volume']
     ema_cv = calculate_ema(cv, st_len)
@@ -165,7 +192,7 @@ def calculate_trend_status(df, target_direction):
     current_idx = len(df) - 1
     
     if get_ai_label(current_idx) != target_val:
-        return False, 0
+        return False, 0, w_ema_val
     
     duration = 0
     scan_limit = min(100, len(df) - n - 50) 
@@ -175,13 +202,13 @@ def calculate_trend_status(df, target_direction):
         else:
             break
             
-    return True, duration
+    return True, duration, w_ema_val
 
 # ==========================================
 # 3. 页面与交互逻辑
 # ==========================================
 
-st.set_page_config(page_title="SuperTrend AI 自动版", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="SuperTrend AI Pro", page_icon="⚡", layout="wide")
 settings = load_settings()
 
 @st.cache_resource
@@ -190,14 +217,12 @@ def get_config():
 
 st.sidebar.header("⚙️ 策略与股票池")
 
-# 1. 趋势方向
 st.sidebar.subheader("1. 趋势方向")
+st.sidebar.info("逻辑: 价格>20周EMA 且 日EMA20>60 且 SuperTrend看涨")
 direction_option = st.sidebar.radio("寻找机会:", ("🚀 看涨 (Bullish)", "📉 看跌 (Bearish)"), index=0)
 target_trend = "Bullish" if "看涨" in direction_option else "Bearish"
 
 st.sidebar.divider()
-
-# 2. 市场与自动填充逻辑
 st.sidebar.subheader("2. 市场筛选 (自动填充)")
 
 tab_hk, tab_us = st.sidebar.tabs(["🇭🇰 港股", "🇺🇸 美股"])
@@ -222,37 +247,27 @@ def handle_preset_selection(market_key, initial_val, widget_key):
         if selection != "📝 自定义/手动输入":
             st.session_state[txt_key] = PRESET_LISTS[market_key][selection]
 
-    st.selectbox(
-        f"快速选择 {market_key} 股票池:", 
-        options, 
-        index=default_idx, 
-        key=sel_key,
-        on_change=on_selection_change 
-    )
-    
-    if txt_key not in st.session_state:
-        st.session_state[txt_key] = initial_val
-
-    text_input = st.text_area("股票代码列表:", key=txt_key, height=120)
-    return text_input
+    st.selectbox(f"快速选择 {market_key}:", options, index=default_idx, key=sel_key, on_change=on_selection_change)
+    if txt_key not in st.session_state: st.session_state[txt_key] = initial_val
+    return st.text_area("代码列表:", key=txt_key, height=120)
 
 with tab_hk:
     hk_codes = handle_preset_selection("HK", settings.get("HK", ""), "hk")
-    if st.button("🚀 筛选港股", type="primary", width='stretch'):
+    if st.button("🚀 筛选港股", type="primary", use_container_width=True):
         trigger_market = "HK"
         symbol_list_to_run = [s.strip() for s in hk_codes.replace('\n', ',').split(',') if s.strip()]
         market_display_name = "港股 (HK)"
 
 with tab_us:
     us_codes = handle_preset_selection("US", settings.get("US", ""), "us")
-    if st.button("🚀 筛选美股", type="primary", width='stretch'):
+    if st.button("🚀 筛选美股", type="primary", use_container_width=True):
         trigger_market = "US"
         symbol_list_to_run = [s.strip() for s in us_codes.replace('\n', ',').split(',') if s.strip()]
         market_display_name = "美股 (US)"
 
 # --- 主页面 ---
 trend_icon = "🟢" if target_trend == "Bullish" else "🔴"
-st.title(f"{trend_icon} SuperTrend AI - {target_trend} 智能筛选")
+st.title(f"{trend_icon} SuperTrend AI Pro - {target_trend}")
 
 if 'screened_results' not in st.session_state:
     st.session_state.screened_results = []
@@ -277,7 +292,7 @@ if trigger_market:
     total = len(symbol_list_to_run)
     
     if total == 0:
-        msg_placeholder.error("❌ 股票列表为空，请选择预设或手动输入。")
+        msg_placeholder.error("❌ 股票列表为空。")
         bar_placeholder.empty()
     else:
         for idx, symbol in enumerate(symbol_list_to_run):
@@ -290,14 +305,15 @@ if trigger_market:
                         "low": float(c.low), "close": float(c.close), "volume": float(c.volume)
                     } for c in candles])
                     
-                    is_match, duration = calculate_trend_status(df, target_trend)
+                    is_match, duration, w_ema = calculate_trend_status(df, target_trend)
                     
                     if is_match:
                         results.append({
                             "symbol": symbol,
                             "trend": target_trend,
                             "duration": duration,
-                            "last_close_algo": df['close'].iloc[-1]
+                            "last_close_algo": df['close'].iloc[-1],
+                            "weekly_ema": w_ema
                         })
             except Exception as e:
                 pass 
@@ -309,11 +325,11 @@ if trigger_market:
         bar_placeholder.empty()
         
         if not results:
-            st.warning(f"在 {market_display_name} 中未发现符合 {target_trend} 条件的股票。")
+            st.warning(f"在 {market_display_name} 中未发现符合条件的股票。")
         else:
-            st.success(f"✅ 筛选完成！找到 {len(results)} 只机会股。")
+            st.success(f"✅ 筛选完成！找到 {len(results)} 只优质机会。")
 
-# --- 结果展示 (修复：请求 static_info 计算市值/PE) ---
+# --- 结果展示 (表格优化) ---
 if st.session_state.screened_results:
     if st.session_state.current_market_scope:
         st.subheader(f"📊 筛选结果: {st.session_state.current_market_scope}")
@@ -323,14 +339,9 @@ if st.session_state.screened_results:
     if target_symbols:
         ctx = QuoteContext(get_config())
         try:
-            # 1. 获取实时报价 (Quote)
             quotes = ctx.quote(target_symbols)
-            
-            # 2. 获取基础静态信息 (Static Info)
-            # 注意：如果股票池很大，可以考虑分批请求，但几百个以内通常没问题
             static_infos = ctx.static_info(target_symbols)
             
-            # 转换为字典以便快速查找
             quote_map = {q.symbol: q for q in quotes}
             info_map = {i.symbol: i for i in static_infos}
             
@@ -341,38 +352,31 @@ if st.session_state.screened_results:
                 q = quote_map.get(sym)
                 info = info_map.get(sym)
                 
-                # 价格数据
                 current = float(q.last_done) if q else item['last_close_algo']
                 prev = float(q.prev_close) if q else item['last_close_algo']
                 chg = ((current - prev) / prev) * 100 if prev > 0 else 0.0
                 
-                # 基础数据计算
                 total_shares = int(info.total_shares) if info and info.total_shares else 0
                 eps_ttm = 0.0
                 if info and info.eps_ttm:
-                    try:
-                        eps_ttm = float(info.eps_ttm)
-                    except:
-                        eps_ttm = 0.0
+                    try: eps_ttm = float(info.eps_ttm)
+                    except: eps_ttm = 0.0
                 
-                # 计算市值 = 最新价 * 总股本
                 mkt_cap = current * total_shares
+                pe_ttm = current / eps_ttm if eps_ttm > 0 else -1
                 
-                # 计算市盈率 = 最新价 / EPS(TTM)
-                pe_ttm = 0.0
-                if eps_ttm > 0:
-                    pe_ttm = current / eps_ttm
-                elif eps_ttm < 0:
-                    pe_ttm = -1 # 亏损
+                # 计算乖离率
+                w_ema = item['weekly_ema']
+                bias = ((current - w_ema) / w_ema) * 100 if w_ema > 0 else 0
                 
                 icon = "🟢" if item['trend'] == "Bullish" else "🔴"
-                
                 display_data.append({
                     "代码": sym, 
                     "最新价": current, 
                     "涨跌幅 (%)": chg,
+                    "偏离度(周EMA)": bias, # 保持数值以便格式化
                     "总市值": format_large_num(mkt_cap),
-                    "市盈率(TTM)": f"{pe_ttm:.2f}" if pe_ttm > 0 else "亏损" if pe_ttm == -1 else "-",
+                    "市盈率(TTM)": f"{pe_ttm:.2f}" if pe_ttm > 0 else "亏损",
                     "趋势": f"{icon} {item['trend']}", 
                     "持续天数": int(item['duration'])
                 })
@@ -387,6 +391,7 @@ if st.session_state.screened_results:
             st_df = df_display.style.format({
                 "最新价": "{:.3f}", 
                 "涨跌幅 (%)": "{:+.2f}%", 
+                "偏离度(周EMA)": "{:+.2f}%",
                 "持续天数": "{} 天"
             }).map(color_change, subset=["涨跌幅 (%)"]).map(color_trend_col, subset=["趋势"])
 
@@ -397,7 +402,7 @@ if st.session_state.screened_results:
                 if st.session_state.last_update_time:
                     st.caption(f"上次筛选: {time.ctime(st.session_state.last_update_time)}")
             
-            st.dataframe(st_df, width='stretch', height=600)
+            st.dataframe(st_df, use_container_width=True, height=600)
 
         except Exception as e:
             st.error(f"行情数据获取失败: {e}")
