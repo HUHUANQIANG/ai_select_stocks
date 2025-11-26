@@ -195,7 +195,8 @@ def calculate_trend_status(df, target_direction):
         return False, 0, w_ema_val
     
     duration = 0
-    scan_limit = min(100, len(df) - n - 50) 
+    # 移除100天限制，扫描所有可用数据
+    scan_limit = len(df) - n - 50 
     for i in range(scan_limit):
         if get_ai_label(current_idx - i) == target_val:
             duration += 1
