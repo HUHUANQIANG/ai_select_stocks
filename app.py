@@ -21,11 +21,25 @@ PRESET_LISTS = {
     }
 }
 
-
 # ==========================================
 # 1. 配置与辅助函数
 # ==========================================
 SETTINGS_FILE = "stock_settings.json"
+
+def get_tradingview_url(symbol):
+    """根据 LongPort 格式转换 TradingView 链接"""
+    parts = symbol.split('.')
+    ticker = parts[0]
+    market = parts[1] if len(parts) > 1 else ""
+    
+    if market == "HK":
+        # 港股去掉前导 0，前缀用 HKG
+        clean_ticker = ticker.lstrip('0')
+        return f"https://www.tradingview.com/chart/?symbol={clean_ticker}"
+    elif market == "US":
+        # 美股通常直接用代码
+        return f"https://www.tradingview.com/chart/?symbol={ticker}"
+    return f"https://www.tradingview.com/chart/?symbol={symbol}"
 
 def load_settings():
     default = {
@@ -196,7 +210,7 @@ def calculate_trend_status(df, target_direction):
     
     duration = 0
     # 移除100天限制，扫描所有可用数据
-    scan_limit = len(df) - n - 50 
+    scan_limit = len(df) - n - 50
     for i in range(scan_limit):
         if get_ai_label(current_idx - i) == target_val:
             duration += 1
@@ -370,13 +384,17 @@ if st.session_state.screened_results:
                 w_ema = item['weekly_ema']
                 bias = ((current - w_ema) / w_ema) * 100 if w_ema > 0 else 0
                 
+                # 市值转换为亿（数值，便于排序）
+                mkt_cap_billion = mkt_cap / 100000000 if mkt_cap > 0 else 0
+                
                 icon = "🟢" if item['trend'] == "Bullish" else "🔴"
                 display_data.append({
                     "代码": sym, 
+                    "图表": get_tradingview_url(sym),
                     "最新价": current, 
                     "涨跌幅 (%)": chg,
                     "偏离度(周EMA)": bias, # 保持数值以便格式化
-                    "总市值": format_large_num(mkt_cap),
+                    "总市值(亿)": mkt_cap_billion,
                     "市盈率(TTM)": f"{pe_ttm:.2f}" if pe_ttm > 0 else "亏损",
                     "趋势": f"{icon} {item['trend']}", 
                     "持续天数": int(item['duration'])
@@ -393,6 +411,7 @@ if st.session_state.screened_results:
                 "最新价": "{:.3f}", 
                 "涨跌幅 (%)": "{:+.2f}%", 
                 "偏离度(周EMA)": "{:+.2f}%",
+                "总市值(亿)": "{:.2f}",
                 "持续天数": "{} 天"
             }).map(color_change, subset=["涨跌幅 (%)"]).map(color_trend_col, subset=["趋势"])
 
@@ -403,7 +422,21 @@ if st.session_state.screened_results:
                 if st.session_state.last_update_time:
                     st.caption(f"上次筛选: {time.ctime(st.session_state.last_update_time)}")
             
-            st.dataframe(st_df, use_container_width=True, height=600)
+            st.dataframe(
+                st_df, 
+                use_container_width=True, 
+                height=600,
+                column_config={
+                    # 注意: 键名必须与 DataFrame 列名一致，这里列名是 "图表"
+                    "图表": st.column_config.LinkColumn(
+                        "📈 交互图表",
+                        help="点击跳转到 TradingView 查看实时 K 线",
+                        validate=r"^https://.*",
+                        display_text="点击看盘"
+                    ),
+                    "代码": st.column_config.TextColumn("股票代码")
+                }
+            )
 
         except Exception as e:
             st.error(f"行情数据获取失败: {e}")
