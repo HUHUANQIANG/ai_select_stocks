@@ -45,7 +45,7 @@ def get_tradingview_url(symbol):
     elif market == "US":
         # 美股通常直接用代码
         return f"https://www.tradingview.com/chart/?symbol={ticker}"
-    return f"https://www.tradingview.com/chart/?symbol={symbol}"
+    return f"https://www.tradingview.com/chart/?symbol={ticker}"
 
 def load_settings():
     default = {
