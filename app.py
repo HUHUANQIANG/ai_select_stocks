@@ -51,6 +51,7 @@ def load_settings():
     default = {
         "HK": PRESET_LISTS["HK"]["🇭🇰 恒生科技 (30)"],
         "US": PRESET_LISTS["US"]["🇺🇸 纳斯达克 (100)"],
+        "CN": PRESET_LISTS["CN"]["CN 上证主板"], # 新增 A股默认值
     }
     if os.path.exists(SETTINGS_FILE):
         try:
@@ -246,7 +247,7 @@ target_trend = "Bullish" if "看涨" in direction_option else "Bearish"
 st.sidebar.divider()
 st.sidebar.subheader("2. 市场筛选 (自动填充)")
 
-tab_hk, tab_us = st.sidebar.tabs(["🇭🇰 港股", "🇺🇸 美股"])
+tab_hk, tab_us, tab_cn = st.sidebar.tabs(["🇭🇰 港股", "🇺🇸 美股", "🇨🇳 A股"])
 
 trigger_market = None
 symbol_list_to_run = []
@@ -286,6 +287,14 @@ with tab_us:
         symbol_list_to_run = [s.strip() for s in us_codes.replace('\n', ',').split(',') if s.strip()]
         market_display_name = "美股 (US)"
 
+# --- 新增 A股 处理模块 ---
+with tab_cn:
+    cn_codes = handle_preset_selection("CN", settings.get("CN", ""), "cn")
+    if st.button("🚀 筛选 A股", type="primary", use_container_width=True):
+        trigger_market = "CN"
+        symbol_list_to_run = [s.strip() for s in cn_codes.replace('\n', ',').split(',') if s.strip()]
+        market_display_name = "A股 (CN)"
+
 # --- 主页面 ---
 trend_icon = "🟢" if target_trend == "Bullish" else "🔴"
 st.title(f"{trend_icon} SuperTrend AI Pro - {target_trend}")
@@ -298,7 +307,7 @@ if 'current_market_scope' not in st.session_state:
     st.session_state.current_market_scope = ""
 
 if trigger_market:
-    new_settings = {"HK": hk_codes, "US": us_codes}
+    new_settings = {"HK": hk_codes, "US": us_codes, "CN": cn_codes}
     save_settings(new_settings)
     st.session_state.current_market_scope = market_display_name
     
